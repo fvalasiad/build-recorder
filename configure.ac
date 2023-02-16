@@ -28,6 +28,7 @@ AC_CONFIG_SRCDIR([src/main.c])
 dnl Checks for programs
 dnl Checks for libraries
 AC_CHECK_LIB(crypto, SHA1_Init,, AC_MSG_ERROR([cannot find libcrypto]))
+AC_CHECK_LIB(pthread, pthread_cond_signal,, AC_MSG_ERROR([cannot find libpthread]))
 
 dnl Checks for headers
 AC_CHECK_HEADER([linux/ptrace.h],, AC_MSG_ERROR([cannot find linux/ptrace.h]))

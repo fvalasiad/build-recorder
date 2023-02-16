@@ -23,10 +23,28 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<sys/syscall.h>
 #include	<sys/wait.h>
 #include	<linux/limits.h>
+#define	__USE_GNU
+#include	<sched.h>
 
 #include	"types.h"
 #include	"hash.h"
 #include	"record.h"
+
+#include	<pthread.h>
+#include	"threadpool.h"
+
+pthread_mutex_t notifier_lock;
+pthread_cond_t notifier_cond;
+pid_t *tbc;
+int numtbc;
+int tbc_size;
+pid_t next;
+pid_t notifier;
+char notifier_stop = 0;
+
+
+threadpool pool;
+char contn;
 
 /*
  * variables for the list of processes,
@@ -43,6 +61,7 @@ int pinfo_size;
 FILE_INFO *finfo;
 int numfinfo;
 int finfo_size;
+pthread_rwlock_t finfo_lock;
 
 #define	DEFAULT_PINFO_SIZE	32
 #define	DEFAULT_FINFO_SIZE	32
@@ -62,6 +81,7 @@ init(void)
     finfo_size = DEFAULT_FINFO_SIZE;
     finfo = calloc(finfo_size, sizeof (FILE_INFO));
     numfinfo = -1;
+    pthread_rwlock_init(&finfo_lock, NULL);
 }
 
 PROCESS_INFO *
@@ -95,46 +115,6 @@ next_finfo(void)
     return finfo + (++numfinfo);
 }
 
-void
-pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
-{
-    static int pcount = 0;
-
-    sprintf(self->outname, ":p%d", pcount++);
-    self->finfo_size = DEFAULT_FINFO_SIZE;
-    self->numfinfo = -1;
-    self->finfo = malloc(self->finfo_size * sizeof (FILE_INFO));
-    self->fds = malloc(self->finfo_size * sizeof (int));
-    self->ignore_one_sigstop = ignore_one_sigstop;
-}
-
-void
-finfo_new(FILE_INFO *self, char *path, char *abspath, char *hash)
-{
-    static int fcount = 0;
-
-    self->path = path;
-    self->abspath = abspath;
-    self->hash = hash;
-    sprintf(self->outname, ":f%d", fcount++);
-}
-
-PROCESS_INFO *
-find_pinfo(pid_t pid)
-{
-    int i = numpinfo;
-
-    while (i >= 0 && pids[i] != pid) {
-	--i;
-    }
-
-    if (i < 0) {
-	return NULL;
-    }
-
-    return pinfo + i;
-}
-
 FILE_INFO *
 find_finfo(char *abspath, char *hash)
 {
@@ -156,6 +136,66 @@ find_finfo(char *abspath, char *hash)
 
     return finfo + i;
 }
+
+void
+finfo_new(FILE_INFO *self, char *path, char *abspath, char *hash)
+{
+    static int fcount = 0;
+
+    self->path = path;
+    self->abspath = abspath;
+    self->hash = hash;
+    sprintf(self->outname, ":f%d", fcount++);
+}
+
+FILE_INFO *
+finfo_insert(char *path, char *abspath, char *hash)
+{
+    pthread_rwlock_wrlock(&finfo_lock);
+    FILE_INFO *f = find_finfo(abspath, hash);
+    if (!f) {
+	f = next_finfo();
+	finfo_new(f, path, abspath, hash);
+	record_file(f->outname, path, abspath);
+	record_hash(f->outname, hash);
+    } else {
+	free(path);
+	free(abspath);
+	free(hash);
+    }
+    pthread_rwlock_unlock(&finfo_lock);
+}
+
+void
+pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
+{
+    static int pcount = 0;
+
+    sprintf(self->outname, ":p%d", pcount++);
+    self->finfo_size = DEFAULT_FINFO_SIZE;
+    self->numfinfo = -1;
+    self->finfo = malloc(self->finfo_size * sizeof (FILE_INFO));
+    self->fds = malloc(self->finfo_size * sizeof (int));
+    self->ignore_one_sigstop = ignore_one_sigstop;
+}
+
+
+PROCESS_INFO *
+find_pinfo(pid_t pid)
+{
+    int i = numpinfo;
+
+    while (i >= 0 && pids[i] != pid) {
+	--i;
+    }
+
+    if (i < 0) {
+	return NULL;
+    }
+
+    return pinfo + i;
+}
+
 
 FILE_INFO *
 pinfo_find_finfo(PROCESS_INFO *self, int fd)
@@ -262,6 +302,21 @@ find_in_path(char *path)
     return ret;
 }
 
+extern void
+foo(void *arg)
+{
+    FILE_INFO *f = arg;
+    pid_t pid = f->hash;
+    char *hash = get_file_hash(f->abspath);
+
+    finfo_insert(f->path, f->abspath, hash);
+
+    pthread_mutex_lock(&notifier_lock);
+    tbc[++numtbc] = pid;
+    pthread_mutex_unlock(&notifier_lock);
+    pthread_cond_signal(&notifier_cond);
+}
+
 static void
 handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 	    int purpose)
@@ -275,19 +330,14 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     FILE_INFO *f = NULL;
 
     if ((purpose & O_ACCMODE) == O_RDONLY) {
-	char *hash = get_file_hash(abspath);
+	f = malloc(sizeof(FILE_INFO));
+	f->path = path;
+	f->abspath = abspath;
+	f->hash = pid;
 
-	f = find_finfo(abspath, hash);
-	if (!f) {
-	    f = next_finfo();
-	    finfo_new(f, path, abspath, hash);
-	    record_file(f->outname, path, abspath);
-	    record_hash(f->outname, hash);
-	} else {
-	    free(path);
-	    free(abspath);
-	    free(hash);
-	}
+	packaged_task task = {foo, f};
+	threadpool_enqueue(&pool, task);
+	contn = 0;
     } else {
 	f = pinfo_next_finfo(pi, fd);
 	finfo_new(f, path, abspath, NULL);
@@ -572,9 +622,21 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 
     while (running) {
 	pid = wait(&status);
+	contn = 1;
 
 	if (pid < 0) {
 	    error(EXIT_FAILURE, errno, "wait failed");
+	}
+
+	if (pid == notifier) {
+	    if (ptrace(PTRACE_SYSCALL, next, NULL, NULL) < 0) {
+		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_SYSCALL");
+	    }
+	    if (ptrace(PTRACE_CONT, pid, NULL, NULL) < 0) {
+		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_CONT");
+	    }
+
+	    continue;
 	}
 
 	unsigned int restart_sig = 0;
@@ -634,6 +696,8 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		    restart_sig = WSTOPSIG(status);
 	    }
 
+	    if(!contn)
+		continue;
 	    // Restarting process 
 	    if (ptrace(PTRACE_SYSCALL, pid, NULL, restart_sig) < 0) {
 		error(EXIT_FAILURE, errno, "failed restarting process");
@@ -663,9 +727,45 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
     }
 }
 
+static int
+run_notifier(void *)
+{
+    if (ptrace(PTRACE_TRACEME, NULL, NULL, NULL) < 0) {
+	error(EXIT_FAILURE, errno, "on run_notifier ptrace(PTRACE_TRACEME)");
+    }
+
+    while (1) {
+	pthread_mutex_lock(&notifier_lock);
+	while(!notifier_stop && numtbc == -1) {
+	    pthread_cond_wait(&notifier_cond, &notifier_lock);
+	}
+	if(notifier_stop && numtbc == -1) {
+	    return 0;
+	}
+	next = tbc[numtbc--];
+	pthread_mutex_unlock(&notifier_lock);
+	raise(SIGSTOP);
+    }
+}
+
 void
 trace(pid_t pid, char *path, char **envp)
 {
+    tbc = malloc(32 * sizeof(pid_t));
+    tbc_size = 32;
+    numtbc = -1;
+
+    pthread_mutex_init(&notifier_lock, NULL);
+    pthread_cond_init(&notifier_cond, NULL);
+
+    char *stack = malloc(1024 * 1024);
+    notifier = clone(run_notifier, stack + 1024 * 1024, CLONE_VM, NULL);
+    if(notifier < 0) {
+	error(EXIT_FAILURE, errno, "on trace clone");
+    }
+
+    threadpool_new(&pool, 3);
+
     PROCESS_INFO *pi;
 
     pi = next_pinfo(pid);
@@ -673,6 +773,9 @@ trace(pid_t pid, char *path, char **envp)
     pinfo_new(pi, 0);
 
     tracer_main(pid, pi, path, envp);
+
+    notifier_stop = 1;
+    pthread_cond_signal(&notifier_cond);
 }
 
 void
