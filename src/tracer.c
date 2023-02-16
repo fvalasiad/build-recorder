@@ -33,6 +33,8 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<pthread.h>
 #include	"threadpool.h"
 
+#include	"hashmap.h"
+
 pthread_mutex_t notifier_lock;
 pthread_cond_t notifier_cond;
 pid_t *tbc;
@@ -58,10 +60,8 @@ PROCESS_INFO *pinfo;
 int numpinfo;
 int pinfo_size;
 
-FILE_INFO *finfo;
-int numfinfo;
-int finfo_size;
-pthread_rwlock_t finfo_lock;
+
+hashmap finfo;
 
 #define	DEFAULT_PINFO_SIZE	32
 #define	DEFAULT_FINFO_SIZE	32
@@ -78,10 +78,21 @@ init(void)
     pids = malloc(pinfo_size * sizeof (int));
     numpinfo = -1;
 
-    finfo_size = DEFAULT_FINFO_SIZE;
-    finfo = calloc(finfo_size, sizeof (FILE_INFO));
-    numfinfo = -1;
-    pthread_rwlock_init(&finfo_lock, NULL);
+    hashmap_new(&finfo);
+}
+
+static char *
+craft_key(char *abspath, char *hash)
+{
+    if (hash == NULL) {
+	return strdup(abspath);
+    }
+    char *key = malloc(strlen(abspath) + 41);
+
+    strcpy(key, hash);
+    strcpy(key + 40, abspath);
+
+    return key;
 }
 
 PROCESS_INFO *
@@ -102,41 +113,6 @@ next_pinfo(pid_t pid)
     return pinfo + (++numpinfo);
 }
 
-FILE_INFO *
-next_finfo(void)
-{
-    if (numfinfo == finfo_size - 1) {
-	finfo_size *= 2;
-	finfo = reallocarray(finfo, finfo_size, sizeof (FILE_INFO));
-	if (finfo == NULL)
-	    error(EXIT_FAILURE, errno, "reallocating file info array");
-    }
-
-    return finfo + (++numfinfo);
-}
-
-FILE_INFO *
-find_finfo(char *abspath, char *hash)
-{
-    int i = numfinfo;
-
-    while (i >= 0) {
-	if (!strcmp(abspath, finfo[i].abspath)
-	    && ((hash == NULL && finfo[i].hash == NULL)
-		|| !strcmp(hash, finfo[i].hash))) {
-	    break;
-	}
-
-	--i;
-    }
-
-    if (i < 0) {
-	return NULL;
-    }
-
-    return finfo + i;
-}
-
 void
 finfo_new(FILE_INFO *self, char *path, char *abspath, char *hash)
 {
@@ -146,24 +122,6 @@ finfo_new(FILE_INFO *self, char *path, char *abspath, char *hash)
     self->abspath = abspath;
     self->hash = hash;
     sprintf(self->outname, ":f%d", fcount++);
-}
-
-FILE_INFO *
-finfo_insert(char *path, char *abspath, char *hash)
-{
-    pthread_rwlock_wrlock(&finfo_lock);
-    FILE_INFO *f = find_finfo(abspath, hash);
-    if (!f) {
-	f = next_finfo();
-	finfo_new(f, path, abspath, hash);
-	record_file(f->outname, path, abspath);
-	record_hash(f->outname, hash);
-    } else {
-	free(path);
-	free(abspath);
-	free(hash);
-    }
-    pthread_rwlock_unlock(&finfo_lock);
 }
 
 void
@@ -178,7 +136,6 @@ pinfo_new(PROCESS_INFO *self, char ignore_one_sigstop)
     self->fds = malloc(self->finfo_size * sizeof (int));
     self->ignore_one_sigstop = ignore_one_sigstop;
 }
-
 
 PROCESS_INFO *
 find_pinfo(pid_t pid)
@@ -306,10 +263,13 @@ extern void
 foo(void *arg)
 {
     FILE_INFO *f = arg;
-    pid_t pid = f->hash;
-    char *hash = get_file_hash(f->abspath);
+    pid_t pid = (pid_t) f->hash;
+    f->hash = get_file_hash(f->abspath);
 
-    finfo_insert(f->path, f->abspath, hash);
+    char *key = craft_key(f->abspath, f->hash);
+
+    hashmap_insert(&finfo, key, f);
+    free(f);
 
     pthread_mutex_lock(&notifier_lock);
     tbc[++numtbc] = pid;
@@ -333,7 +293,7 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 	f = malloc(sizeof(FILE_INFO));
 	f->path = path;
 	f->abspath = abspath;
-	f->hash = pid;
+	f->hash = (char *) pid;
 
 	packaged_task task = {foo, f};
 	threadpool_enqueue(&pool, task);
@@ -368,21 +328,21 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 
     char *hash = get_file_hash(abspath);
 
-    FILE_INFO *f;
+    FILE_INFO f;
+    finfo_new(&f, path, abspath, hash);
+    char *key = craft_key(abspath, hash);
 
-    if (!(f = find_finfo(abspath, hash))) {
-	f = next_finfo();
-
-	finfo_new(f, path, abspath, hash);
-	record_file(f->outname, path, abspath);
-	record_hash(f->outname, f->hash);
+    if (hashmap_insert(&finfo, key, &f)) {
+	record_file(f.outname, path, abspath);
+	record_hash(f.outname, f.hash);
     } else {
+	free(key);
 	free(abspath);
 	free(hash);
 	free(path);
     }
 
-    record_exec(pi->outname, f->outname);
+    record_exec(pi->outname, f.outname);
 }
 
 static void
@@ -391,38 +351,40 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
     char *abspath = absolutepath(pid, olddirfd, oldpath);
     char *hash = get_file_hash(abspath);
 
-    FILE_INFO *f = find_finfo(abspath, hash);
+    FILE_INFO f;
+    finfo_new(&f, oldpath, abspath, hash);
+    char *key = craft_key(f.abspath, f.hash);
 
-    if (!f) {
-	f = next_finfo();
-	finfo_new(f, oldpath, abspath, hash);
-	record_file(f->outname, oldpath, abspath);
-	record_hash(f->outname, f->hash);
+    if (hashmap_insert(&finfo, key, &f)) {
+	record_file(f.outname, oldpath, abspath);
+	record_hash(f.outname, f.hash);
+	key = strdup(key);
     } else {
 	free(oldpath);
 	free(abspath);
 	free(hash);
     }
 
-    pi->entry_info = (void *) (f - finfo);
-    if (pi->entry_info == NULL)
-	error(EXIT_FAILURE, errno, "on handle_rename_entry absolutepath");
+    pi->entry_info = key;
 }
 
 static void
 handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 {
-    FILE_INFO *from = finfo + (ptrdiff_t) pi->entry_info;
+    FILE_INFO from;
+    hashmap_insert(&finfo, (char *) pi->entry_info, &from);
 
     char *abspath = absolutepath(pid, newdirfd, newpath);
 
-    FILE_INFO *to = next_finfo();
+    FILE_INFO to;
+    finfo_new(&to, newpath, abspath, from.hash);
+    char *key = craft_key(to.abspath, to.hash);
+    hashmap_insert(&finfo, key, &to); 
 
-    finfo_new(to, newpath, abspath, from->hash);
-    record_file(to->outname, newpath, abspath);
-    record_hash(to->outname, to->hash);
+    record_file(to.outname, newpath, abspath);
+    record_hash(to.outname, to.hash);
 
-    record_rename(pi->outname, from->outname, to->outname);
+    record_rename(pi->outname, from.outname, to.outname);
 }
 
 static void
@@ -530,7 +492,8 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi,
 		record_hash(f->outname, f->hash);
 
 		// Add it to global cache list
-		*next_finfo() = *f;
+		char *key = craft_key(f->abspath, f->hash);
+		hashmap_insert(&finfo, key, f);
 
 		// Remove the file from the process' list
 		for (int i = f - pi->finfo; i < pi->numfinfo; ++i) {

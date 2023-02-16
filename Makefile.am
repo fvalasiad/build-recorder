@@ -12,5 +12,6 @@ build_recorder_SOURCES = \
     src/hash.c \
     src/record.c \
     src/threadpool.c \
+    src/hashmap.c \
     src/main.c
 

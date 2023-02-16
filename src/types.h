@@ -5,6 +5,9 @@ Copyright (C) 2022 Valasiadis Fotios
 SPDX-License-Identifier: LGPL-2.1-or-later
 */
 
+#ifndef BUILDRECORDERTYPES
+#define BUILDRECORDERTYPES
+
 #include "config.h"
 
 #include <sys/types.h>
@@ -48,3 +51,5 @@ typedef struct {
     void *entry_info;
     char ignore_one_sigstop;
 } PROCESS_INFO;
+
+#endif
