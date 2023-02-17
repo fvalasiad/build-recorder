@@ -116,12 +116,9 @@ next_pinfo(pid_t pid)
 void
 finfo_new(FILE_INFO *self, char *path, char *abspath, char *hash)
 {
-    static int fcount = 0;
-
     self->path = path;
     self->abspath = abspath;
     self->hash = hash;
-    sprintf(self->outname, ":f%d", fcount++);
 }
 
 void
@@ -259,17 +256,71 @@ find_in_path(char *path)
     return ret;
 }
 
-extern void
-foo(void *arg)
+typedef struct {
+    char *path;
+    char *abspath;
+    int purpose;
+
+    pid_t pid;
+    char poutname[16];
+} pack;
+
+void
+finfo_insert(FILE_INFO *f)
 {
-    FILE_INFO *f = arg;
-    pid_t pid = (pid_t) f->hash;
     f->hash = get_file_hash(f->abspath);
 
     char *key = craft_key(f->abspath, f->hash);
 
-    hashmap_insert(&finfo, key, f);
-    free(f);
+    FILE_INFO dest;
+
+    if (hashmap_insert(&finfo, key, f, &dest)) {
+	record_file(dest.outname, dest.path, dest.abspath);
+    } else {
+	free(f->path);
+	free(f->abspath);
+	free(f->hash);
+	free(key);
+    }
+
+    *f = dest;
+}
+
+extern void
+schedule_open(void *arg)
+{
+    FILE_INFO f;
+
+    pack *p = arg;
+    f.path = p->path;
+    f.abspath = p->abspath;
+    pid_t pid = p->pid;
+
+    finfo_insert(&f);
+    
+    record_fileuse(p->poutname, f.outname, p->purpose);
+    free(p);
+
+    pthread_mutex_lock(&notifier_lock);
+    tbc[++numtbc] = pid;
+    pthread_mutex_unlock(&notifier_lock);
+    pthread_cond_signal(&notifier_cond);
+}
+
+extern void
+schedule_execve(void *arg)
+{
+    FILE_INFO f;
+
+    pack *p = arg;
+    f.path = p->path;
+    f.abspath = p->abspath;
+    pid_t pid = p->pid;
+
+    finfo_insert(&f);
+    
+    record_exec(p->poutname, f.outname);
+    free(p);
 
     pthread_mutex_lock(&notifier_lock);
     tbc[++numtbc] = pid;
@@ -290,21 +341,21 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     FILE_INFO *f = NULL;
 
     if ((purpose & O_ACCMODE) == O_RDONLY) {
-	f = malloc(sizeof(FILE_INFO));
-	f->path = path;
-	f->abspath = abspath;
-	f->hash = (char *) pid;
+	pack *p = malloc(sizeof(pack));
+	p->path = path;
+	p->abspath = abspath;
+	p->pid = pid;
+	strcpy(p->poutname, pi->outname);
+	p->purpose = purpose;
 
-	packaged_task task = {foo, f};
+	packaged_task task = {schedule_open, p};
 	threadpool_enqueue(&pool, task);
 	contn = 0;
     } else {
 	f = pinfo_next_finfo(pi, fd);
 	finfo_new(f, path, abspath, NULL);
-	record_file(f->outname, path, abspath);
     }
 
-    record_fileuse(pi->outname, f->outname, purpose);
 }
 
 static void
@@ -326,23 +377,15 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 	}
     }
 
-    char *hash = get_file_hash(abspath);
+    pack *p = malloc(sizeof(pack));
+    p->path = path;
+    p->abspath = abspath;
+    p->pid = pid;
+    strcpy(p->poutname, pi->outname);
 
-    FILE_INFO f;
-    finfo_new(&f, path, abspath, hash);
-    char *key = craft_key(abspath, hash);
-
-    if (hashmap_insert(&finfo, key, &f)) {
-	record_file(f.outname, path, abspath);
-	record_hash(f.outname, f.hash);
-    } else {
-	free(key);
-	free(abspath);
-	free(hash);
-	free(path);
-    }
-
-    record_exec(pi->outname, f.outname);
+    packaged_task task = {schedule_execve, p};
+    threadpool_enqueue(&pool, task);
+    contn = 0;
 }
 
 static void
@@ -355,9 +398,11 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
     finfo_new(&f, oldpath, abspath, hash);
     char *key = craft_key(f.abspath, f.hash);
 
-    if (hashmap_insert(&finfo, key, &f)) {
-	record_file(f.outname, oldpath, abspath);
-	record_hash(f.outname, f.hash);
+    FILE_INFO dest;
+
+    if (hashmap_insert(&finfo, key, &f, &dest)) {
+	record_file(dest.outname, oldpath, abspath);
+	record_hash(dest.outname, f.hash);
 	key = strdup(key);
     } else {
 	free(oldpath);
@@ -372,14 +417,14 @@ static void
 handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 {
     FILE_INFO from;
-    hashmap_insert(&finfo, (char *) pi->entry_info, &from);
+    hashmap_insert(&finfo, (char *) pi->entry_info, NULL, &from);
 
     char *abspath = absolutepath(pid, newdirfd, newpath);
 
     FILE_INFO to;
     finfo_new(&to, newpath, abspath, from.hash);
     char *key = craft_key(to.abspath, to.hash);
-    hashmap_insert(&finfo, key, &to); 
+    hashmap_insert(&finfo, key, &to, &to); 
 
     record_file(to.outname, newpath, abspath);
     record_hash(to.outname, to.hash);
@@ -493,7 +538,9 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi,
 
 		// Add it to global cache list
 		char *key = craft_key(f->abspath, f->hash);
-		hashmap_insert(&finfo, key, f);
+		hashmap_insert(&finfo, key, f, f);
+		record_file(f->outname, path, f->abspath);
+		record_fileuse(pi->outname, f->outname, O_WRONLY);
 
 		// Remove the file from the process' list
 		for (int i = f - pi->finfo; i < pi->numfinfo; ++i) {
@@ -577,11 +624,6 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 
     int status;
     PROCESS_INFO *process_state;
-
-    // Starting tracee
-    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) < 0) {
-	error(EXIT_FAILURE, errno, "tracee PTRACE_SYSCALL failed");
-    }
 
     while (running) {
 	pid = wait(&status);
@@ -714,7 +756,7 @@ run_notifier(void *)
 void
 trace(pid_t pid, char *path, char **envp)
 {
-    tbc = malloc(32 * sizeof(pid_t));
+    tbc = malloc(128 * sizeof(pid_t));
     tbc_size = 32;
     numtbc = -1;
 
@@ -722,7 +764,7 @@ trace(pid_t pid, char *path, char **envp)
     pthread_cond_init(&notifier_cond, NULL);
 
     char *stack = malloc(1024 * 1024);
-    notifier = clone(run_notifier, stack + 1024 * 1024, CLONE_VM, NULL);
+    notifier = clone(run_notifier, stack + 1024 * 1024, CLONE_VM | CLONE_UNTRACED, NULL);
     if(notifier < 0) {
 	error(EXIT_FAILURE, errno, "on trace clone");
     }

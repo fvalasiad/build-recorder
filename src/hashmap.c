@@ -5,12 +5,15 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 */
 
 #include	<stdlib.h>
+#include	<stdio.h>
 #include	<string.h>
 #include	<error.h>
 #include	<errno.h>
 #include	"hashmap.h"
 
 #define DEFAULT_CAPACITY 32
+
+static int fcount = 0;
 
 int
 hash_str(char *str)
@@ -50,9 +53,8 @@ hashmap_new(hashmap *self)
 }
 
 char 
-hashmap_insert(hashmap *self, key_type key, value_type *value)
+hashmap_insert_impl(hashmap *self, key_type key, value_type *value, value_type **dest)
 {
-    pthread_mutex_lock(&self->lock);
     if (self->size == self->capacity) {
 	hashmap_reallocate(self);
     }
@@ -71,21 +73,36 @@ hashmap_insert(hashmap *self, key_type key, value_type *value)
 	}
     }
 
-    char ret;
+    char ret = 0;
     if (!self->keys[pos]) {
 	self->keys[pos] = key;
 	self->values[pos] = *value;
 	++self->size;
 	ret = 1;
-    } else {
-	*value = self->values[pos];
-	ret = 0;
     }
+
+    *dest = self->values + pos;
+
+    return ret;
+}
+
+char
+hashmap_insert(hashmap *self, key_type key, value_type *value, value_type *dest)
+{
+    pthread_mutex_lock(&self->lock);
+    value_type *ptr;
+    char ret = hashmap_insert_impl(self, key, value, &ptr);
+    if(ret) {
+	sprintf(ptr->outname, ":f%d", fcount++);
+    }
+
+    *dest = *ptr;
 
     pthread_mutex_unlock(&self->lock);
 
     return ret;
 }
+
 
 static void
 hashmap_free(hashmap *self)
@@ -105,7 +122,8 @@ hashmap_reallocate(hashmap *self)
 	if (!self->keys[i])
 	    continue;
 
-	hashmap_insert(&hm, self->keys[i], self->values + i);
+	value_type *dest;
+	hashmap_insert_impl(&hm, self->keys[i], self->values + i, &dest);
     }
 
     hashmap_free(self);

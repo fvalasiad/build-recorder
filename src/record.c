@@ -19,8 +19,10 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<fcntl.h>
 #include	<error.h>
 #include	<errno.h>
+#include	<pthread.h>
 
 FILE *fout;
+pthread_mutex_t lock;
 
 void
 record_start(char *fname)
@@ -32,15 +34,19 @@ record_start(char *fname)
 	    "@prefix :  <http://example.org/build-recorder/run#> .\n"
 	    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n"
 	    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n");
+
+    pthread_mutex_init(&lock, NULL);
 }
 
 static void
 record_triple(char *s, const char *p, char *o, bool o_as_string)
 {
+    pthread_mutex_lock(&lock);
     if (o_as_string)
 	fprintf(fout, "%s\t%s\t\"%s\" .\n", s, p, o);
     else
 	fprintf(fout, "%s\t%s\t%s .\n", s, p, o);
+    pthread_mutex_unlock(&lock);
 }
 
 static void

@@ -23,4 +23,4 @@ typedef struct {
 
 void hashmap_new(hashmap *self);
 
-char hashmap_insert(hashmap *self, key_type key, value_type *value);
+char hashmap_insert(hashmap *self, key_type key, value_type *value, value_type *dest);
