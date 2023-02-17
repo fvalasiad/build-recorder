@@ -4,7 +4,6 @@ Copyright (C) 2022 Valasiadis Fotios
 SPDX-License-Identifier: LGPL-2.1-or-later
 */
 
-#include <pthread.h>
 #include "types.h"
 
 /* Simple hashmap with open addressing linear probing. */
@@ -12,13 +11,10 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 typedef char *key_type;
 typedef FILE_INFO value_type;
 
-typedef struct {
-    key_type *keys;
-    value_type *values;
-    int size;
-    int capacity;
+typedef struct bucket bucket;
 
-    pthread_mutex_t lock;
+typedef struct {
+    bucket *buckets;
 } hashmap;
 
 void hashmap_new(hashmap *self);
