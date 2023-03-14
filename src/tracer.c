@@ -35,15 +35,8 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include	"hashmap.h"
 
-pthread_mutex_t notifier_lock;
-pthread_cond_t notifier_cond;
-pid_t *tbc;
-int numtbc;
-int tbc_size;
-pid_t next;
+int pipes[2];
 pid_t notifier;
-char notifier_stop = 0;
-
 
 threadpool pool;
 char contn;
@@ -301,10 +294,7 @@ schedule_open(void *arg)
     record_fileuse(p->poutname, f.outname, p->purpose);
     free(p);
 
-    pthread_mutex_lock(&notifier_lock);
-    tbc[++numtbc] = pid;
-    pthread_mutex_unlock(&notifier_lock);
-    pthread_cond_signal(&notifier_cond);
+    write(pipes[1], &pid, sizeof(pid));
 }
 
 extern void
@@ -322,10 +312,7 @@ schedule_execve(void *arg)
     record_exec(p->poutname, f.outname);
     free(p);
 
-    pthread_mutex_lock(&notifier_lock);
-    tbc[++numtbc] = pid;
-    pthread_mutex_unlock(&notifier_lock);
-    pthread_cond_signal(&notifier_cond);
+    write(pipes[1], &pid, sizeof(pid));
 }
 
 static void
@@ -634,9 +621,13 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 	}
 
 	if (pid == notifier) {
+	    pid_t next;
+	    read(pipes[0], &next, sizeof(next));
+
 	    if (ptrace(PTRACE_SYSCALL, next, NULL, NULL) < 0) {
 		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_SYSCALL");
 	    }
+
 	    if (ptrace(PTRACE_CONT, pid, NULL, NULL) < 0) {
 		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_CONT");
 	    }
@@ -732,39 +723,35 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
     }
 }
 
-static int
-run_notifier(void *)
+static void
+run_notifier()
 {
     if (ptrace(PTRACE_TRACEME, NULL, NULL, NULL) < 0) {
 	error(EXIT_FAILURE, errno, "on run_notifier ptrace(PTRACE_TRACEME)");
     }
 
-    while (1) {
-	pthread_mutex_lock(&notifier_lock);
-	while(!notifier_stop && numtbc == -1) {
-	    pthread_cond_wait(&notifier_cond, &notifier_lock);
-	}
-	if(notifier_stop && numtbc == -1) {
-	    return 0;
-	}
-	next = tbc[numtbc--];
-	pthread_mutex_unlock(&notifier_lock);
+    close(pipes[1]);
+
+    fd_set readfd;
+    FD_ZERO(&readfd);
+    FD_SET(pipes[0], &readfd);
+
+    while(select(pipes[0] + 1, &readfd, NULL, NULL, NULL) > 0) {
 	raise(SIGSTOP);
     }
+
+    close(pipes[0]);
 }
 
 void
 trace(pid_t pid, char *path, char **envp)
 {
-    tbc = malloc(128 * sizeof(pid_t));
-    tbc_size = 32;
-    numtbc = -1;
+    pipe(pipes);
 
-    pthread_mutex_init(&notifier_lock, NULL);
-    pthread_cond_init(&notifier_cond, NULL);
-
-    char *stack = malloc(1024 * 1024);
-    notifier = clone(run_notifier, stack + 1024 * 1024, CLONE_VM | CLONE_UNTRACED, NULL);
+    notifier = fork();
+    if(notifier == 0) {
+	    run_notifier();
+    }
     if(notifier < 0) {
 	error(EXIT_FAILURE, errno, "on trace clone");
     }
@@ -779,8 +766,8 @@ trace(pid_t pid, char *path, char **envp)
 
     tracer_main(pid, pi, path, envp);
 
-    notifier_stop = 1;
-    pthread_cond_signal(&notifier_cond);
+    close(pipes[0]);
+    close(pipes[1]);
 }
 
 void
