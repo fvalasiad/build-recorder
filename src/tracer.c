@@ -15,6 +15,7 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<string.h>
 #include	<unistd.h>
 #include	<fcntl.h>
+#include	<poll.h>
 
 #include	<sys/ptrace.h>
 #include	<linux/ptrace.h>
@@ -52,7 +53,6 @@ int *pids;
 PROCESS_INFO *pinfo;
 int numpinfo;
 int pinfo_size;
-
 
 hashmap finfo;
 
@@ -142,7 +142,6 @@ find_pinfo(pid_t pid)
 
     return pinfo + i;
 }
-
 
 FILE_INFO *
 pinfo_find_finfo(PROCESS_INFO *self, int fd)
@@ -285,16 +284,17 @@ schedule_open(void *arg)
     FILE_INFO f;
 
     pack *p = arg;
+
     f.path = p->path;
     f.abspath = p->abspath;
     pid_t pid = p->pid;
 
     finfo_insert(&f);
-    
+
     record_fileuse(p->poutname, f.outname, p->purpose);
     free(p);
 
-    write(pipes[1], &pid, sizeof(pid));
+    write(pipes[1], &pid, sizeof (pid));
 }
 
 extern void
@@ -303,16 +303,17 @@ schedule_execve(void *arg)
     FILE_INFO f;
 
     pack *p = arg;
+
     f.path = p->path;
     f.abspath = p->abspath;
     pid_t pid = p->pid;
 
     finfo_insert(&f);
-    
+
     record_exec(p->poutname, f.outname);
     free(p);
 
-    write(pipes[1], &pid, sizeof(pid));
+    write(pipes[1], &pid, sizeof (pid));
 }
 
 static void
@@ -328,14 +329,15 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     FILE_INFO *f = NULL;
 
     if ((purpose & O_ACCMODE) == O_RDONLY) {
-	pack *p = malloc(sizeof(pack));
+	pack *p = malloc(sizeof (pack));
+
 	p->path = path;
 	p->abspath = abspath;
 	p->pid = pid;
 	strcpy(p->poutname, pi->outname);
 	p->purpose = purpose;
 
-	packaged_task task = {schedule_open, p};
+	packaged_task task = { schedule_open, p };
 	threadpool_enqueue(&pool, task);
 	contn = 0;
     } else {
@@ -364,13 +366,14 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 	}
     }
 
-    pack *p = malloc(sizeof(pack));
+    pack *p = malloc(sizeof (pack));
+
     p->path = path;
     p->abspath = abspath;
     p->pid = pid;
     strcpy(p->poutname, pi->outname);
 
-    packaged_task task = {schedule_execve, p};
+    packaged_task task = { schedule_execve, p };
     threadpool_enqueue(&pool, task);
     contn = 0;
 }
@@ -382,6 +385,7 @@ handle_rename_entry(pid_t pid, PROCESS_INFO *pi, int olddirfd, char *oldpath)
     char *hash = get_file_hash(abspath);
 
     FILE_INFO f;
+
     finfo_new(&f, oldpath, abspath, hash);
     char *key = craft_key(f.abspath, f.hash);
 
@@ -404,14 +408,17 @@ static void
 handle_rename_exit(pid_t pid, PROCESS_INFO *pi, int newdirfd, char *newpath)
 {
     FILE_INFO from;
+
     hashmap_insert(&finfo, (char *) pi->entry_info, NULL, &from);
 
     char *abspath = absolutepath(pid, newdirfd, newpath);
 
     FILE_INFO to;
+
     finfo_new(&to, newpath, abspath, from.hash);
     char *key = craft_key(to.abspath, to.hash);
-    hashmap_insert(&finfo, key, &to, &to); 
+
+    hashmap_insert(&finfo, key, &to, &to);
 
     record_file(to.outname, newpath, abspath);
     record_hash(to.outname, to.hash);
@@ -525,6 +532,7 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi,
 
 		// Add it to global cache list
 		char *key = craft_key(f->abspath, f->hash);
+
 		hashmap_insert(&finfo, key, f, f);
 		record_file(f->outname, path, f->abspath);
 		record_fileuse(pi->outname, f->outname, O_WRONLY);
@@ -622,14 +630,17 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 
 	if (pid == notifier) {
 	    pid_t next;
-	    read(pipes[0], &next, sizeof(next));
+
+	    read(pipes[0], &next, sizeof (next));
 
 	    if (ptrace(PTRACE_SYSCALL, next, NULL, NULL) < 0) {
-		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_SYSCALL");
+		error(EXIT_FAILURE, errno,
+		      "on tracer_main notifier PTRACE_SYSCALL");
 	    }
 
 	    if (ptrace(PTRACE_CONT, pid, NULL, NULL) < 0) {
-		error(EXIT_FAILURE, errno, "on tracer_main notifier PTRACE_CONT");
+		error(EXIT_FAILURE, errno,
+		      "on tracer_main notifier PTRACE_CONT");
 	    }
 
 	    continue;
@@ -692,7 +703,7 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		    restart_sig = WSTOPSIG(status);
 	    }
 
-	    if(!contn)
+	    if (!contn)
 		continue;
 	    // Restarting process 
 	    if (ptrace(PTRACE_SYSCALL, pid, NULL, restart_sig) < 0) {
@@ -732,11 +743,12 @@ run_notifier()
 
     close(pipes[1]);
 
-    fd_set readfd;
-    FD_ZERO(&readfd);
-    FD_SET(pipes[0], &readfd);
+    struct pollfd readfd;
 
-    while(select(pipes[0] + 1, &readfd, NULL, NULL, NULL) > 0) {
+    readfd.fd = pipes[0];
+    readfd.events = POLLIN | POLLHUP;
+
+    while ((poll(&readfd, 1, -1) > 0) && !(readfd.revents & POLLHUP)) {
 	raise(SIGSTOP);
     }
 
@@ -749,14 +761,15 @@ trace(pid_t pid, char *path, char **envp)
     pipe(pipes);
 
     notifier = fork();
-    if(notifier == 0) {
-	    run_notifier();
+    if (notifier == 0) {
+	run_notifier();
+	return;
     }
-    if(notifier < 0) {
+    if (notifier < 0) {
 	error(EXIT_FAILURE, errno, "on trace clone");
     }
 
-    threadpool_new(&pool, 3);
+    threadpool_new(&pool, 7);
 
     PROCESS_INFO *pi;
 
@@ -766,8 +779,9 @@ trace(pid_t pid, char *path, char **envp)
 
     tracer_main(pid, pi, path, envp);
 
-    close(pipes[0]);
+    threadpool_destroy(&pool);
     close(pipes[1]);
+    close(pipes[0]);
 }
 
 void
