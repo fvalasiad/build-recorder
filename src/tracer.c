@@ -40,7 +40,6 @@ int pipes[2];
 pid_t notifier;
 
 threadpool pool;
-char contn;
 
 /*
  * variables for the list of processes,
@@ -293,8 +292,6 @@ schedule_open(void *arg)
 
     record_fileuse(p->poutname, f.outname, p->purpose);
     free(p);
-
-    write(pipes[1], &pid, sizeof (pid));
 }
 
 extern void
@@ -312,8 +309,6 @@ schedule_execve(void *arg)
 
     record_exec(p->poutname, f.outname);
     free(p);
-
-    write(pipes[1], &pid, sizeof (pid));
 }
 
 static void
@@ -339,7 +334,6 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
 
 	packaged_task task = { schedule_open, p };
 	threadpool_enqueue(&pool, task);
-	contn = 0;
     } else {
 	f = pinfo_next_finfo(pi, fd);
 	finfo_new(f, path, abspath, NULL);
@@ -375,7 +369,6 @@ handle_execve(pid_t pid, PROCESS_INFO *pi, int dirfd, char *path)
 
     packaged_task task = { schedule_execve, p };
     threadpool_enqueue(&pool, task);
-    contn = 0;
 }
 
 static void
@@ -622,7 +615,6 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 
     while (running) {
 	pid = wait(&status);
-	contn = 1;
 
 	if (pid < 0) {
 	    error(EXIT_FAILURE, errno, "wait failed");
@@ -703,8 +695,6 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 		    restart_sig = WSTOPSIG(status);
 	    }
 
-	    if (!contn)
-		continue;
 	    // Restarting process 
 	    if (ptrace(PTRACE_SYSCALL, pid, NULL, restart_sig) < 0) {
 		error(EXIT_FAILURE, errno, "failed restarting process");
