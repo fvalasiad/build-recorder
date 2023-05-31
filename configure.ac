@@ -27,12 +27,12 @@ AC_CONFIG_SRCDIR([src/main.c])
 
 dnl Checks for programs
 dnl Checks for libraries
-AC_CHECK_LIB(crypto, SHA1_Init,, AC_MSG_ERROR([cannot find libcrypto]))
 AC_CHECK_LIB(pthread, pthread_cond_signal,, AC_MSG_ERROR([cannot find libpthread]))
+AC_CHECK_LIB(crypto, EVP_sha1,, AC_MSG_ERROR([cannot find libcrypto]))
 
 dnl Checks for headers
 AC_CHECK_HEADER([linux/ptrace.h],, AC_MSG_ERROR([cannot find linux/ptrace.h]))
-AC_CHECK_HEADER([openssl/sha.h],, AC_MSG_ERROR([cannot find openssl/sha.h]))
+AC_CHECK_HEADER([openssl/evp.h],, AC_MSG_ERROR([cannot find openssl/evp.h]))
 AC_CHECK_HEADER([sys/mman.h],, AC_MSG_ERROR([cannot find sys/mman.h]))
 AC_CHECK_HEADER([sys/ptrace.h],, AC_MSG_ERROR([cannot find sys/ptrace.h]))
 AC_CHECK_HEADER([sys/signal.h],, AC_MSG_ERROR([cannot find sys/signal.h]))
@@ -47,8 +47,6 @@ dnl Checks for typedefs and structures
 AC_CHECK_TYPE([struct ptrace_syscall_info],, AC_MSG_ERROR([cannot find struct ptrace_syscall_info]), [#include <linux/ptrace.h>])
 
 AC_CHECK_TYPE([pid_t],, AC_MSG_ERROR([cannot find pid_t]), [#include <sys/types.h>])
-
-AC_CHECK_TYPE([SHA_CTX],, AC_MSG_ERROR([cannot find SHA_CTX]), [#include <openssl/sha.h>])
 
 AC_CHECK_DECL([PATH_MAX],, AC_MSG_ERROR([cannot find PATH_MAX]), [#include <linux/limits.h>])
 AC_CHECK_DECL([ARG_MAX],, AC_MSG_ERROR([cannot find ARG_MAX]), [#include <linux/limits.h>])
@@ -69,24 +67,32 @@ AC_CHECK_DECL([PTRACE_SYSCALL_INFO_EXIT],, AC_MSG_ERROR([cannot find PTRACE_SYSC
 AC_CHECK_DECL([SIGTRAP],, AC_MSG_ERROR([cannot find SIGTRAP]), [#include <sys/signal.h>])
 AC_CHECK_DECL([SIGSTOP],, AC_MSG_ERROR([cannot find SIGSTOP]), [#include <sys/signal.h>])
 
-AC_CHECK_DECL([SYS_open],, AC_MSG_ERROR([cannot find SYS_open]), [#include <sys/syscall.h>])
-AC_CHECK_DECL([SYS_creat],, AC_MSG_ERROR([cannot find SYS_creat]), [#include <sys/syscall.h>])
-AC_CHECK_DECL([SYS_openat],, AC_MSG_ERROR([cannot find SYS_openat]), [#include <sys/syscall.h>])
-AC_CHECK_DECL([SYS_close],, AC_MSG_ERROR([cannot find SYS_close]), [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_clone], [AC_DEFINE([HAVE_SYS_CLONE], [1], [[Define if SYS_clone is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_close], [AC_DEFINE([HAVE_SYS_CLOSE], [1], [[Define if SYS_close is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_creat], [AC_DEFINE([HAVE_SYS_CREAT], [1], [[Define if SYS_creat is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_execve], [AC_DEFINE([HAVE_SYS_EXECVE], [1], [[Define if SYS_execve is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_execveat], [AC_DEFINE([HAVE_SYS_EXECVEAT], [1], [[Define if SYS_execveat is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_fork], [AC_DEFINE([HAVE_SYS_FORK], [1], [[Define if SYS_fork is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_open], [AC_DEFINE([HAVE_SYS_OPEN], [1], [[Define if SYS_open is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_openat], [AC_DEFINE([HAVE_SYS_OPENAT], [1], [[Define if SYS_openat is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_rename], [AC_DEFINE([HAVE_SYS_RENAME], [1], [[Define if SYS_rename is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_renameat], [AC_DEFINE([HAVE_SYS_RENAMEAT], [1], [[Define if SYS_renameat is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_renameat2], [AC_DEFINE([HAVE_SYS_RENAMEAT2], [1], [[Define if SYS_renameat2 is available]])],, [#include <sys/syscall.h>])
+AC_CHECK_DECL([SYS_vfork], [AC_DEFINE([HAVE_SYS_VFORK], [1], [[Define if SYS_vfork is available]])],, [#include <sys/syscall.h>])
 
 AC_CHECK_DECL([MADV_SEQUENTIAL],, AC_MSG_ERROR([cannot find MADV_SEQUENTIAL]), [#include <sys/mman.h>])
 
 dnl Checks for functions
-AC_CHECK_FUNC([SHA1_Init],, AC_MSG_ERROR([cannot find SHA1_Init(3)]))
-AC_CHECK_FUNC([SHA1_Update],, AC_MSG_ERROR([cannot find SHA1_Update(3)]))
-AC_CHECK_FUNC([SHA1_Final],, AC_MSG_ERROR([cannot find SHA1_Final(3)]))
-
 AC_CHECK_FUNC([fork],, AC_MSG_ERROR([cannot find fork(2)]))
 AC_CHECK_FUNC([ptrace],, AC_MSG_ERROR([cannot find ptrace(2)]))
 AC_CHECK_FUNC([waitpid],, AC_MSG_ERROR([cannot find waitpid(2)]))
 
 AC_CHECK_FUNC([mmap],, AC_MSG_ERROR([cannot find mmap(2)]))
 AC_CHECK_FUNC([madvise],, AC_MSG_ERROR([cannot find madvise(2)]))
+
+AC_CHECK_FUNC([EVP_DigestInit_ex],, AC_MSG_ERROR([cannot find EVP_DigestInit_ex(3)]))
+AC_CHECK_FUNC([EVP_DigestUpdate],, AC_MSG_ERROR([cannot find EVP_DigestUpdate(3)]))
+AC_CHECK_FUNC([EVP_DigestFinal_ex],, AC_MSG_ERROR([cannot find EVP_DigestFinal_ex(3)]))
 
 dnl We need a C compiler
 AC_PROG_CC
