@@ -7,8 +7,8 @@ bin_PROGRAMS = build-recorder
 build_recorder_SOURCES = \
 	hash.c \
 	main.c \
-	record.c \
 	schema.c \
+	record.c \
 	tracer.c \
 	$(EMPTY)
 
