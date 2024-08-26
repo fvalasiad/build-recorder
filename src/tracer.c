@@ -55,11 +55,24 @@ init(void)
 {
     pinfo_size = DEFAULT_PINFO_SIZE;
     pinfo = calloc(pinfo_size, sizeof (PROCESS_INFO));
+    if (!pinfo) {
+	perror("tracer.c:init():calloc(pinfo)");
+	exit(EXIT_FAILURE);
+    }
     pids = malloc(pinfo_size * sizeof (int));
+    if (!pids) {
+	perror("tracer.c:init():malloc(pids)");
+	exit(EXIT_FAILURE);
+    }
     numpinfo = -1;
 
     finfo_size = DEFAULT_FINFO_SIZE;
     finfo = calloc(finfo_size, sizeof (FILE_INFO));
+    if (!finfo) {
+	perror("tracer.c:init():malloc(finfo)");
+	exit(EXIT_FAILURE);
+    }
+
     numfinfo = -1;
 }
 
@@ -250,6 +263,11 @@ find_in_path(char *path)
     static char buf[PATH_MAX];
     char *ret;
     char *PATH = strdup(getenv("PATH"));
+
+    if (!PATH) {
+	perror("tracer.c:find_in_path():strdup(getenv(PATH))");
+	exit(EXIT_FAILURE);
+    }
     char *it = PATH;
     char *last;
 
@@ -296,8 +314,8 @@ handle_open(pid_t pid, PROCESS_INFO *pi, int fd, int dirfd, void *path,
     char *abspath = absolutepath(pid, dirfd, path);
 
     if (abspath == NULL) {
-	fprintf(stderr, "tracer.c:handle_open:absolutepath(%s): %s\n", path,
-		strerror(errno));
+	fprintf(stderr, "tracer.c:handle_open:absolutepath(%s): %s\n",
+		(char *) path, strerror(errno));
 	exit(EXIT_FAILURE);
     }
 

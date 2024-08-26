@@ -25,6 +25,11 @@ void
 record_start(char *fname)
 {
     fout = fopen(fname, "w");
+    if (!fout) {
+	fprintf(stderr, "record.c:record_start():fopen(%s): %s\n", fname,
+		strerror(errno));
+	exit(EXIT_FAILURE);
+    }
 
     extern char schema[];
     extern unsigned int schema_len;
