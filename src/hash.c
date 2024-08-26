@@ -17,7 +17,6 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include <sysexits.h>		       // EX_OK, EX_NOINPUT, EX_USAGE
 #include <sys/mman.h>		       // madvise(2), mmap(2)
 #include <sys/stat.h>		       // lstat(2)
-#include <sys/sysinfo.h>	       // get_nprocs(3)
 #include <sys/types.h>		       // 
 #include <unistd.h>		       // optind, readlink(2)
 
