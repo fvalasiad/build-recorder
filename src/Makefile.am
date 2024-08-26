@@ -22,5 +22,5 @@ dist_data_DATA = $(SCHEMA)
 
 if HAVE_XXD
 schema.c: $(SCHEMA)
-	sed '/^#/d' $^ | $(XXD) -i -n schema > $@
+	sed '/^#/d' $< | $(XXD) -i -n schema > $@
 endif
