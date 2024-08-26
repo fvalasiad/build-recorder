@@ -90,7 +90,7 @@ hash_file_contents(char *name, size_t sz)
 	return NULL;
     }
 
-    const static EVP_MD *sha1_md;
+    static const EVP_MD *sha1_md;
 
     if (sha1_md == 0)
 	sha1_md = EVP_sha1();
