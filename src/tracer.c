@@ -16,12 +16,21 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<fcntl.h>
 
 #include	<sys/ptrace.h>
-#include	<linux/ptrace.h>
 
 #include	<sys/signal.h>
 #include	<sys/syscall.h>
 #include	<sys/wait.h>
+
+#ifdef BUILDING_ON_LINUX
+#include	<linux/ptrace.h>
 #include	<linux/limits.h>
+#endif
+
+#ifdef BUILDING_ON_FREEBSD
+#include	<sys/sysctl.h>
+#include	<sys/types.h>
+#include	<sys/user.h>
+#endif
 
 #include	"types.h"
 #include	"hash.h"
@@ -34,7 +43,10 @@ SPDX-License-Identifier: LGPL-2.1-or-later
  * same size and array size.
  */
 
-int *pids;
+#ifdef BUILDING_ON_FREEBSD
+lwpid_t *fbsdpids;
+#endif
+pid_t *pids;
 PROCESS_INFO *pinfo;
 int numpinfo;
 int pinfo_size;
@@ -59,11 +71,18 @@ init(void)
 	perror("tracer.c:init():calloc(pinfo)");
 	exit(EXIT_FAILURE);
     }
-    pids = malloc(pinfo_size * sizeof (int));
+    pids = malloc(pinfo_size * sizeof (pid_t));
     if (!pids) {
 	perror("tracer.c:init():malloc(pids)");
 	exit(EXIT_FAILURE);
     }
+#ifdef BUILDING_ON_FREEBSD
+    fbsdpids = malloc(pinfo_size * sizeof (lwpid_t));
+    if (!fbsdpids) {
+	perror("tracer.c:init():malloc(fbsdpids)");
+	exit(EXIT_FAILURE);
+    }
+#endif
     numpinfo = -1;
 
     finfo_size = DEFAULT_FINFO_SIZE;
@@ -87,11 +106,19 @@ next_pinfo(pid_t pid)
 	    exit(EXIT_FAILURE);
 	}
 
-	pids = reallocarray(pids, pinfo_size, sizeof (int));
+	pids = reallocarray(pids, pinfo_size, sizeof (pid_t));
 	if (pids == NULL) {
 	    perror("tracer.c:next_pinfo:reallocarray(pids)");
 	    exit(EXIT_FAILURE);
 	}
+
+#ifdef BUILDING_ON_FREEBSD
+	fbsdpids = reallocarray(fbsdpids, pinfo_size, sizeof (lwpid_t));
+	if (fbsdpids == NULL) {
+	    perror("tracer.c:next_pinfo:reallocarray(fbsdpids)");
+	    exit(EXIT_FAILURE);
+	}
+#endif
     }
 
     pids[numpinfo + 1] = pid;
@@ -218,18 +245,29 @@ get_str_from_process(pid_t pid, void *addr)
 {
     static char buf[PATH_MAX];
     char *dest = buf;
+#ifdef BUILDING_ON_LINUX
     union {
-	long lval;
+	long ival;
 	char cval[sizeof (long)];
     } data;
+#else // FreeBSD
+    union {
+	int ival;
+	char cval[sizeof (int)];
+    } data;
+#endif
 
     size_t i = 0;
 
     do {
-	data.lval =
-		ptrace(PTRACE_PEEKDATA, pid, (char *) addr + i * sizeof (long),
+	data.ival =
+#ifdef BUILDING_ON_LINUX
+		ptrace(PTRACE_PEEKDATA, pid, (char *) addr + i * sizeof (data.ival),
 		       NULL);
-	for (unsigned j = 0; j < sizeof (long); j++) {
+#else // FreeBSD
+		ptrace(PT_READ_D, pid, (char *) addr + i * sizeof(data.ival), 0);
+#endif
+	for (unsigned j = 0; j < sizeof (data.ival); j++) {
 	    *dest++ = data.cval[j];
 	    if (data.cval[j] == 0)
 		break;
@@ -237,7 +275,12 @@ get_str_from_process(pid_t pid, void *addr)
 	++i;
     } while (dest[-1]);
 
-    return strdup(buf);
+    char *ret = strdup(buf);
+    if (!ret) {
+	perror("tracer.c:get_str_from_process():strdup(buf)");
+	exit(EXIT_FAILURE);
+    }
+    return ret;
 }
 
 char *
@@ -249,11 +292,90 @@ absolutepath(pid_t pid, int dirfd, char *addr)
 	return realpath(addr, NULL);
     }
     if (dirfd == AT_FDCWD) {
-	sprintf(symbpath, "/proc/%d/cwd/%s", pid, addr);
+#ifdef BUILDING_ON_LINUX
+	int bytes = snprintf(symbpath, PATH_MAX, "/proc/%d/cwd/%s", pid, addr);
+	if (bytes >= PATH_MAX) {
+	    perror("tracer.c:absolutepath():snprintf(/proc/%d/cwd/%s): truncating string");
+	    exit(EXIT_FAILURE);
+	}
+#else
+	int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_CWD, pid};
+	size_t len;
+	struct kinfo_file *kif;
+
+	if (sysctl(mib, sizeof(mib) / sizeof(int), NULL, &len, NULL, 0) < 0) {
+	    perror("sysctl");
+	    exit(EXIT_FAILURE);
+	}
+
+	kif = malloc(len);
+	if (!kif) {
+	    perror("sysctl");
+	}
+
+	if (sysctl(mib, sizeof(mib) / sizeof(int), kif, &len, NULL, 0) < 0) {
+	    perror("sysctl");
+	    exit(EXIT_FAILURE);
+	}
+
+	int bytes = snprintf(symbpath, PATH_MAX, "%s/%s", kif->kf_path, addr);
+	if (bytes >= PATH_MAX) {
+	    perror("tracer.c:absolutepath():snprintf(%s/%s): truncating string");
+	    exit(EXIT_FAILURE);
+	}
+	free(kif);
+#endif
 	return realpath(symbpath, NULL);
     }
 
-    sprintf(symbpath, "/proc/%d/fd/%d/%s", pid, dirfd, addr);
+#ifdef BUILDING_ON_LINUX
+    int bytes = snprintf(symbpath, PATH_MAX, "/proc/%d/fd/%d/%s", pid, dirfd, addr);
+    if (bytes >= PATH_MAX) {
+	perror("tracer.c:absolutepath():snprintf(/proc/%d/fd/%d/%s): truncating string");
+	exit(EXIT_FAILURE);
+    }
+#else
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_FILEDESC, pid};
+    size_t len;
+    struct kinfo_file *kif;
+    
+    if (sysctl(mib, sizeof(mib) / sizeof(int), NULL, &len, NULL, 0) < 0) {
+	perror("sysctl");
+	exit(EXIT_FAILURE);
+    }
+
+    kif = malloc(len);
+    if (!kif) {
+	perror("sysctl");
+    }
+
+    if (sysctl(mib, sizeof(mib) / sizeof(int), kif, &len, NULL, 0) < 0) {
+	perror("sysctl");
+	exit(EXIT_FAILURE);
+    }
+
+    size_t count = len / sizeof(struct kinfo_file);
+    size_t i;
+    for (i = 0; i < count; i++) {
+        if (kif[i].kf_fd == dirfd /*&& kif[i].kf_type == KF_TYPE_VNODE*/) {  
+            //printf("FD: %d, Path: %s\n", kif[i].kf_fd, kif[i].kf_path);
+	    break;
+        }
+    }
+
+    if (i == count) {
+	free(kif);
+	errno = ENOENT; // Replicating the Linux behavior.
+	return NULL;
+    }
+
+    int bytes = snprintf(symbpath, PATH_MAX, "%s/%s", kif[i].kf_path, addr);
+    if (bytes >= PATH_MAX) {
+	perror("tracer.c:absolutepath():snprintf(%s/%s, kf_path): truncating string");
+	exit(EXIT_FAILURE);
+    }
+    free(kif);
+#endif
     return realpath(symbpath, NULL);
 }
 
@@ -440,8 +562,8 @@ handle_rename_exit(pid_t pid, PROCESS_INFO *pi, char *oldpath, int newdirfd,
 }
 
 static void
-handle_syscall_entry(pid_t pid, PROCESS_INFO *pi,
-		     const struct ptrace_syscall_info *entry)
+handle_syscall_entry(pid_t pid, PROCESS_INFO *pi)
+		     
 {
     int olddirfd;
     char *oldpath;
@@ -617,10 +739,14 @@ handle_syscall_exit(pid_t pid, PROCESS_INFO *pi, int64_t rval)
     }
 }
 
+#ifdef BUILDING_ON_LINUX
 static void
-tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
+tracer_main(pid_t pid, char *path, char **envp)
 {
     waitpid(pid, NULL, 0);
+
+    PROCESS_INFO *pi = next_pinfo(pid);
+    pinfo_new(pi, 0);
 
     record_process_env(pi->outname, envp);
     handle_execve(pid, pi, AT_FDCWD, path);
@@ -764,23 +890,160 @@ tracer_main(pid_t pid, PROCESS_INFO *pi, char *path, char **envp)
 	}
     }
 }
+#endif
 
-void
-trace(pid_t pid, char *path, char **envp)
+#ifdef BUILDING_ON_FREEBSD
+static void
+tracer_main(pid_t pid, char *path, char **envp)
 {
-    PROCESS_INFO *pi;
+    pid = waitpid(pid, NULL, 0);
 
-    pi = next_pinfo(pid);
+    struct ptrace_lwpinfo lwpinfo;
+    if (ptrace(PT_LWPINFO, pid, (caddr_t) &lwpinfo, sizeof(lwpinfo)) < 0) {
+	perror("tracer.c:tracer_main:ptrace(PT_LWPINFO)");
+	exit(EXIT_FAILURE);
+    }
+    int lwpid = lwpinfo.pl_lwpid;
 
+    PROCESS_INFO *pi = next_pinfo(lwpid);
     pinfo_new(pi, 0);
+    fbsdpids[pi - pinfo] = pid;
 
-    tracer_main(pid, pi, path, envp);
+    record_process_env(pi->outname, envp);
+    handle_execve(lwpid, pi, AT_FDCWD, path);
+
+    int event_mask = PTRACE_SYSCALL | PTRACE_FORK | PTRACE_LWP | PTRACE_VFORK;
+    if (ptrace(PT_SET_EVENT_MASK, lwpid, (caddr_t) &event_mask, sizeof(event_mask)) < 0) {
+	perror("tracer.c:tracer_main():ptrace(initial PT_SET_EVENT_MASK)");
+	exit(EXIT_FAILURE);
+    }
+
+    int status;
+    PROCESS_INFO *process_state;
+
+    // Starting tracee
+    if (ptrace(PT_CONTINUE, lwpid, (caddr_t) 1, 0) < 0) {
+	perror("tracer.c:tracer_main():ptrace(tracee PT_CONTINUE)");
+	exit(EXIT_FAILURE);
+    }
+
+    while (numpinfo >= 0) {
+	pid = wait(&status);
+
+	if (pid < 0) {
+	    perror("tracer.c:tracer_main():wait()");
+	    exit(EXIT_FAILURE);
+	}
+
+	if (WIFSTOPPED(status)) {
+	    int sig = WSTOPSIG(status);
+
+	    if (ptrace(PT_LWPINFO, pid, (caddr_t) &lwpinfo, sizeof(lwpinfo)) < 0) {
+		perror("tracer.c:tracer_main:ptrace(PT_LWPINFO)");
+		exit(EXIT_FAILURE);
+	    }
+	    lwpid = lwpinfo.pl_lwpid;
+
+	    if ((sig != SIGSTOP || !(lwpinfo.pl_flags & PL_FLAG_BORN)) && sig != SIGTRAP) {
+		if (ptrace(PT_CONTINUE, lwpid, (caddr_t)1, sig) < 0) {
+		    perror("tracer.c:tracer_main:ptrace(PT_CONTINUE)");
+		}
+		continue;
+	    }
+
+	    process_state = find_pinfo(lwpid);
+	    if (!process_state) {
+		process_state = next_pinfo(lwpid);
+		pinfo_new(process_state, 0);
+		fbsdpids[process_state - pinfo] = pid;
+	    }
+
+	    int flags = lwpinfo.pl_flags;
+	    if (flags & PL_FLAG_SCE) {
+		process_state->nr = lwpinfo.pl_syscall_code;
+		if (ptrace(PT_GET_SC_ARGS, lwpid, (caddr_t) process_state->args, lwpinfo.pl_syscall_narg * sizeof (uint64_t)) < 0) {
+		    perror("trace.c:tracer_main:ptrace(PT_GET_SC_ARGS)");
+		    exit(EXIT_FAILURE);
+		}
+
+		handle_syscall_entry(lwpid, process_state);
+	    } else if (flags & PL_FLAG_SCX) {
+		struct ptrace_sc_ret ret;
+		if (ptrace(PT_GET_SC_RET, lwpid, (caddr_t) &ret, sizeof(ret)) < 0) {
+		    perror("trace.c:tracer_main:ptrace(PT_GET_SC_RET)");
+		    exit(EXIT_FAILURE);
+		}
+
+		handle_syscall_exit(lwpid, process_state, !ret.sr_error ? ret.sr_retval[0] : -1);
+	    } else if (flags & PL_FLAG_CHILD) {
+		ptrace(PT_SET_EVENT_MASK, lwpid, (caddr_t) &event_mask, sizeof(event_mask));	
+	    } else if (flags & PL_FLAG_EXITED) {
+		record_process_end(process_state->outname);
+
+		free(process_state->cmd_line);
+		free(process_state->finfo);
+		free(process_state->fds);
+
+		--numpinfo;
+		for (int i = process_state  - pinfo; i < numpinfo; ++i) {
+		    pinfo[i] = pinfo[i + 1];
+		}
+		for (int i = process_state - pinfo; i < numpinfo; ++i) {
+		    pids[i] = pids[i + 1];
+		}
+		for (int i = process_state - pinfo; i < numpinfo; ++i) {
+		    fbsdpids[i] = fbsdpids[i + 1];
+		}
+	    }
+
+	    // Restarting process 
+	    if (ptrace(PT_CONTINUE, lwpid, (caddr_t) 1, 0) < 0) {
+		perror("tracer.c:tracer_main():ptrace(PT_CONTINUE): failed restarting process");
+		exit(EXIT_FAILURE);
+	    }
+	} else if (WIFEXITED(status)) {	// child process exited 
+	    int i = numpinfo;
+
+	    while (i >= 0 && fbsdpids[i] != pid) {
+		--i;
+	    }
+
+	    if (i < 0) {
+		perror("tracer.c:tracer_main():find_fbsdpids(): failure to find last LWP");
+		exit(EXIT_FAILURE);
+	    }
+
+	    process_state = pinfo + i;
+
+	    record_process_end(process_state->outname);
+
+	    free(process_state->cmd_line);
+	    free(process_state->finfo);
+	    free(process_state->fds);
+
+	    --numpinfo;
+	    for (int i = process_state  - pinfo; i < numpinfo; ++i) {
+		pinfo[i] = pinfo[i + 1];
+	    }
+	    for (int i = process_state - pinfo; i < numpinfo; ++i) {
+		pids[i] = pids[i + 1];
+	    }
+	    for (int i = process_state - pinfo; i < numpinfo; ++i) {
+		fbsdpids[i] = fbsdpids[i + 1];
+	    }
+	}
+    }
 }
+#endif
 
 void
 run_tracee(char **av)
 {
+#ifdef BUILDING_ON_LINUX
     ptrace(PTRACE_TRACEME, NULL, NULL, NULL);
+#else
+    ptrace(PT_TRACE_ME, 0, NULL, 0);
+#endif
     execvp(*av, av);
     perror("tracer.c:run_tracee():execvp(): after child exec()");
     exit(EXIT_FAILURE);
@@ -799,5 +1062,5 @@ run_and_record_fnames(char **av, char **envp)
 	run_tracee(av);
 
     init();
-    trace(pid, *av, envp);
+    tracer_main(pid, *av, envp);
 }
