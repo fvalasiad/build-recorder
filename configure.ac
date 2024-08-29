@@ -25,6 +25,9 @@ AC_CONFIG_HEADERS([src/config.h])
 dnl Where are the sources
 AC_CONFIG_SRCDIR([src/main.c])
 
+dnl What are we building on?
+AC_CANONICAL_HOST
+
 AC_ARG_ENABLE([benchmarks],
 	      [AS_HELP_STRING([--enable-benchmarks], [exclude benchmarks (default: disabled)])],
 	      [enable_benchmarks=$enableval],
@@ -53,8 +56,6 @@ dnl Checks for headers
 AC_CHECK_HEADER([errno.h],, AC_MSG_ERROR([cannot find errno.h]))
 AC_CHECK_HEADER([fcntl.h],, AC_MSG_ERROR([cannot find fcntl.h]))
 AC_CHECK_HEADER([limits.h],, AC_MSG_ERROR([cannot find limits.h]))
-AC_CHECK_HEADER([linux/limits.h],, AC_MSG_ERROR([cannot find linux/limits.h]))
-AC_CHECK_HEADER([linux/ptrace.h],, AC_MSG_ERROR([cannot find linux/ptrace.h]))
 AC_CHECK_HEADER([openssl/evp.h],, AC_MSG_ERROR([cannot find openssl/evp.h]))
 AC_CHECK_HEADER([stdbool.h],, AC_MSG_ERROR([cannot find stdbool.h]))
 AC_CHECK_HEADER([stddef.h],, AC_MSG_ERROR([cannot find stddef.h]))
@@ -79,12 +80,10 @@ AC_CHECK_TYPE([EVP_MD_CTX *],, AC_MSG_ERROR([cannot find EVP_MD_CTX *]), [#inclu
 AC_CHECK_TYPE([FILE *],, AC_MSG_ERROR([cannot find FILE *]), [#include <stdio.h>])
 AC_CHECK_TYPE([pid_t],, AC_MSG_ERROR([cannot find pid_t]), [#include <sys/types.h>])
 AC_CHECK_TYPE([ptrdiff_t],, AC_MSG_ERROR([cannot find ptrdiff_t]), [#include <stddef.h>])
-AC_CHECK_TYPE([struct ptrace_syscall_info],, AC_MSG_ERROR([cannot find struct ptrace_syscall_info]), [#include <linux/ptrace.h>])
 AC_CHECK_TYPE([time_t],, AC_MSG_ERROR([cannot find time_t]), [#include <time.h>])
 AC_CHECK_TYPE([uint8_t],, AC_MSG_ERROR([cannot find uint8_t]), [#include <stdint.h>])
 
 
-AC_CHECK_DECL([ARG_MAX],, AC_MSG_ERROR([cannot find ARG_MAX]), [#include <linux/limits.h>])
 AC_CHECK_DECL([AT_FDCWD],, AC_MSG_ERROR([cannot find AT_FDCWD]), [#include <fcntl.h>])
 AC_CHECK_DECL([ENOENT],, AC_MSG_ERROR([cannot find ENOENT]), [#include <errno.h>])
 AC_CHECK_DECL([EXIT_FAILURE],, AC_MSG_ERROR([cannot find EXIT_FAILURE]), [#include <stdlib.h>])
@@ -98,19 +97,8 @@ AC_CHECK_DECL([O_ACCMODE],, AC_MSG_ERROR([cannot find O_ACCMODE]), [#include <fc
 AC_CHECK_DECL([O_RDONLY],, AC_MSG_ERROR([cannot find O_RDONLY]), [#include <fcntl.h>])
 AC_CHECK_DECL([O_RDWR],, AC_MSG_ERROR([cannot find O_RDWR]), [#include <fcntl.h>])
 AC_CHECK_DECL([O_WRONLY],, AC_MSG_ERROR([cannot find O_WRONLY]), [#include <fcntl.h>])
-AC_CHECK_DECL([PATH_MAX],, AC_MSG_ERROR([cannot find PATH_MAX]), [#include <linux/limits.h>])
-AC_CHECK_DECL([PTRACE_GET_SYSCALL_INFO],, AC_MSG_ERROR([cannot find PTRACE_GET_SYSCALL_INFO]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_O_EXITKILL],, AC_MSG_ERROR([cannot find PTRACE_O_EXITKILL]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_O_TRACECLONE],, AC_MSG_ERROR([cannot find PTRACE_O_TRACECLONE]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_O_TRACEFORK],, AC_MSG_ERROR([cannot find PTRACE_O_TRACEFORK]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_O_TRACESYSGOOD],, AC_MSG_ERROR([cannot find PTRACE_O_TRACESYSGOOD]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_O_TRACEVFORK],, AC_MSG_ERROR([cannot find PTRACE_O_TRACEVFORK]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_PEEKDATA],, AC_MSG_ERROR([cannot find PTRACE_PEEKDATA]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_SETOPTIONS],, AC_MSG_ERROR([cannot find PTRACE_SETOPTIONS]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_SYSCALL],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL]), [#include <sys/ptrace.h>])
-AC_CHECK_DECL([PTRACE_SYSCALL_INFO_ENTRY],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL_INFO_ENTRY]), [#include <linux/ptrace.h>])
-AC_CHECK_DECL([PTRACE_SYSCALL_INFO_EXIT],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL_INFO_EXIT]), [#include <linux/ptrace.h>])
-AC_CHECK_DECL([PTRACE_TRACEME],, AC_MSG_ERROR([cannot find PTRACE_TRACEME]), [#include <sys/ptrace.h>])
+
+
 AC_CHECK_DECL([SIGSTOP],, AC_MSG_ERROR([cannot find SIGSTOP]), [#include <sys/signal.h>])
 AC_CHECK_DECL([SIGTRAP],, AC_MSG_ERROR([cannot find SIGTRAP]), [#include <sys/signal.h>])
 AC_CHECK_DECL([SYS_clone], [AC_DEFINE([HAVE_SYS_CLONE], [1], [[Define if SYS_clone is available]])],, [#include <sys/syscall.h>])
@@ -127,8 +115,8 @@ AC_CHECK_DECL([SYS_renameat], [AC_DEFINE([HAVE_SYS_RENAMEAT], [1], [[Define if S
 AC_CHECK_DECL([SYS_vfork], [AC_DEFINE([HAVE_SYS_VFORK], [1], [[Define if SYS_vfork is available]])],, [#include <sys/syscall.h>])
 AC_CHECK_DECL([S_ISLNK],, AC_MSG_ERROR([cannot find S_ISLNK]), [#include <sys/stat.h>])
 AC_CHECK_DECL([S_ISREG],, AC_MSG_ERROR([cannot find S_ISREG]), [#include <sys/stat.h>])
-AC_CHECK_DECL([WIFSTOPPED],, AC_MSG_ERROR([cannot find WIFSTOPPED]), [#include <wait.h>])
-AC_CHECK_DECL([WSTOPSIG],, AC_MSG_ERROR([cannot find WSTOPSIG]), [#include <wait.h>])
+AC_CHECK_DECL([WIFSTOPPED],, AC_MSG_ERROR([cannot find WIFSTOPPED]), [#include <sys/wait.h>])
+AC_CHECK_DECL([WSTOPSIG],, AC_MSG_ERROR([cannot find WSTOPSIG]), [#include <sys/wait.h>])
 AC_CHECK_DECL([errno],, AC_MSG_ERROR([cannot find errno]), [#include <errno.h>])
 
 
@@ -167,6 +155,37 @@ AC_CHECK_FUNC([strftime],, AC_MSG_ERROR([cannot find strftime(3)]))
 AC_CHECK_FUNC([time],, AC_MSG_ERROR([cannot find time(2)]))
 AC_CHECK_FUNC([wait],, AC_MSG_ERROR([cannot find wait(2)]))
 AC_CHECK_FUNC([waitpid],, AC_MSG_ERROR([cannot find waitpid(2)]))
+
+case "$host_os" in
+	*linux*)
+dnl Linux specific checks
+	    AC_DEFINE([BUILDING_ON_LINUX], [1], [[Define to 1 if building on linux]])
+	    AC_CHECK_HEADER([linux/ptrace.h],, AC_MSG_ERROR([cannot find linux/ptrace.h]))
+	    AC_CHECK_HEADER([linux/limits.h],, AC_MSG_ERROR([cannot find linux/limits.h]))
+	    AC_CHECK_TYPE([struct ptrace_syscall_info],, AC_MSG_ERROR([cannot find struct ptrace_syscall_info]), [#include <linux/ptrace.h>])
+	    AC_CHECK_DECL([PATH_MAX],, AC_MSG_ERROR([cannot find PATH_MAX]), [#include <linux/limits.h>])
+	    AC_CHECK_DECL([ARG_MAX],, AC_MSG_ERROR([cannot find ARG_MAX]), [#include <linux/limits.h>])
+
+	    AC_CHECK_DECL([PTRACE_GET_SYSCALL_INFO],, AC_MSG_ERROR([cannot find PTRACE_GET_SYSCALL_INFO]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_SYSCALL],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL]), [#include <sys/ptrace.h>])
+            AC_CHECK_DECL([PTRACE_PEEKDATA],, AC_MSG_ERROR([cannot find PTRACE_PEEKDATA]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_SETOPTIONS],, AC_MSG_ERROR([cannot find PTRACE_SETOPTIONS]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_O_EXITKILL],, AC_MSG_ERROR([cannot find PTRACE_O_EXITKILL]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_O_TRACESYSGOOD],, AC_MSG_ERROR([cannot find PTRACE_O_TRACESYSGOOD]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_O_TRACECLONE],, AC_MSG_ERROR([cannot find PTRACE_O_TRACECLONE]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_O_TRACEFORK],, AC_MSG_ERROR([cannot find PTRACE_O_TRACEFORK]), [#include <sys/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_O_TRACEVFORK],, AC_MSG_ERROR([cannot find PTRACE_O_TRACEVFORK]), [#include <sys/ptrace.h>])
+
+	    AC_CHECK_DECL([PTRACE_SYSCALL_INFO_ENTRY],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL_INFO_ENTRY]), [#include <linux/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_SYSCALL_INFO_EXIT],, AC_MSG_ERROR([cannot find PTRACE_SYSCALL_INFO_EXIT]), [#include <linux/ptrace.h>])
+	    AC_CHECK_DECL([PTRACE_TRACEME],, AC_MSG_ERROR([cannot find PTRACE_TRACEME]), [#include <sys/ptrace.h>])
+	    ;;
+
+	*freebsd*)
+dnl FreeBSD specific checks
+	    AC_DEFINE([BUILDING_ON_FREEBSD], [1], [[Define to 1 if building on freebsd]]) 
+	    ;;
+esac
 
 dnl We need a C compiler
 AC_PROG_CC

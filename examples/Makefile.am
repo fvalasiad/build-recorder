@@ -16,19 +16,19 @@ all:
 examples: $(EXAMPLES)
 
 compile_single_file: f1.c
-	$(EXE) -o $@.out $(CC) -c $^
+	$(EXE) -o $@.out $(CC) -c f1.c
 
 compile_link_file: f1.c
-	$(EXE) -o $@.out $(CC) $^
+	$(EXE) -o $@.out $(CC) f1.c
 
 compile_file_include: f2.c
-	$(EXE) -o $@.out $(CC) -c $^
+	$(EXE) -o $@.out $(CC) -c f2.c
 
 compile_file_sysinclude: f3.c
-	$(EXE) -o $@.out $(CC) -c $^
+	$(EXE) -o $@.out $(CC) -c f3.c
 
 compile_two_files: f4.c f5.c
-	$(EXE) -o $@.out $(CC) $^
+	$(EXE) -o $@.out $(CC) f4.c f5.c
 
 
 clean:

@@ -19,6 +19,10 @@ SPDX-License-Identifier: LGPL-2.1-or-later
 #include	<fcntl.h>
 #include	<errno.h>
 
+#ifdef BUILDING_ON_FREEBSD
+#include	<sys/sysctl.h>
+#endif
+
 FILE *fout;
 
 void
@@ -60,6 +64,7 @@ timestamp_now(char *s, size_t sz)
 static char *
 get_cmdline(pid_t pid)
 {
+#ifdef BUILDING_ON_LINUX
     char cmd_fname[32];
 
     sprintf(cmd_fname, "/proc/%ld/cmdline", (long) pid);
@@ -83,6 +88,35 @@ get_cmdline(pid_t pid)
 	return NULL;
     }
 
+#else // FreeBSD
+    int mib[4];
+    ssize_t n;
+    char *data;
+
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = KERN_PROC_ARGS;
+    mib[3] = pid;
+
+    // First, get the size of the command line
+    if (sysctl(mib, 4, NULL, (size_t *) &n, NULL, 0) == -1) {
+        perror("sysctl");
+	exit(EXIT_FAILURE);
+    }
+
+    data = malloc(n);
+    if (data == NULL) {
+        perror("malloc");
+	exit(EXIT_FAILURE);
+    }
+
+    // Now, get the actual command line
+    if (sysctl(mib, 4, data, (size_t *) &n, NULL, 0) == -1) {
+        perror("sysctl");
+	exit(EXIT_FAILURE);
+    }
+#endif
+
     ssize_t sz;
     bool has_spaces;
     int i;
@@ -99,7 +133,9 @@ get_cmdline(pid_t pid)
 	    has_spaces = false;
 	}
     }
-
+    if (sz == 0) {
+	return NULL;
+    }
     char *ret = malloc(sz);
 
     if (ret == NULL) {
